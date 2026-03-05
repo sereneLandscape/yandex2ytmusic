@@ -2,8 +2,9 @@ import json
 import os
 
 from core import YandexMusicExporter
-from core import YoutubeImoirter
+from core import YoutubeImporter
 from core.track import Track
+from core.podcast import Podcast
 
 
 def export_from_yandex(out_path: str) -> None:
@@ -19,7 +20,12 @@ def export_from_yandex(out_path: str) -> None:
     tracks = importer.export_liked_tracks()
     tracks.reverse()
 
+    print('Экспорт лайкнутых подкастов из Яндекс Музыки...')
+    podcasts = importer.export_liked_podcasts()
+    podcasts.reverse()
+
     data = {
+        'liked_podcasts': [{'label': p.label, 'name': p.name} for p in podcasts],
         'liked_tracks': [{'artist': t.artist, 'name': t.name} for t in tracks],
         'not_found': [],
         'errors': [],
@@ -28,7 +34,7 @@ def export_from_yandex(out_path: str) -> None:
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f'Экспортировано {len(tracks)} треков в {out_path}')
+    print(f'Экспортировано {len(tracks)} треков и {len(podcasts)} подкастов в {out_path}')
 
 
 def import_to_youtube(in_path: str, youtube_creds: str) -> None:
@@ -47,6 +53,9 @@ def import_to_youtube(in_path: str, youtube_creds: str) -> None:
     tracks = [Track(artist=t['artist'], name=t['name']) for t in data['liked_tracks']]
     print(f'Загружено {len(tracks)} треков из {in_path}')
 
+    podcasts = [Podcast(label=p['label'], name=p['name']) for p in data['liked_podcasts']]
+    print(f'Загружено {len(podcasts)} подкастов из {in_path}')
+
     # Выбор режима импорта
     print("\nРежим импорта:")
     print("  1. Быстрый (параллельный, порядок не сохраняется)")
@@ -55,18 +64,29 @@ def import_to_youtube(in_path: str, youtube_creds: str) -> None:
 
     keep_order = mode_choice != "1"
 
-    exporter = YoutubeImoirter(youtube_creds)
+    exporter = YoutubeImporter(youtube_creds)
 
     print('Импорт треков в YouTube Music...')
-    not_found, errors = exporter.import_liked_tracks(tracks, keep_order=keep_order)
+    tracks_not_found, tracks_errors = exporter.import_liked_tracks(tracks, keep_order=keep_order)
 
-    data['not_found'] = [{'artist': t.artist, 'name': t.name} for t in not_found]
-    data['errors'] = [{'artist': t.artist, 'name': t.name} for t in errors]
+    data['not_found'] = [{'artist': t.artist, 'name': t.name} for t in tracks_not_found]
+    data['errors'] = [{'artist': t.artist, 'name': t.name} for t in tracks_errors]
 
-    for track in not_found:
+    for track in tracks_not_found:
         print(f'Не найдено: {track.artist} - {track.name}')
+    print(f'Треков: {len(tracks_not_found)} не найдено, {len(tracks_errors)} ошибок.')
+    
+    print('Импорт подкастов в YouTube Music...')
+    podcasts_not_found, podcasts_errors = exporter.import_liked_podcasts(podcasts, keep_order=keep_order)
 
-    print(f'{len(not_found)} не найдено, {len(errors)} ошибок.')
+    data['not_found'].extend([{'label': p.label, 'name': p.name} for p in podcasts_not_found])
+    data['errors'] = [{'label': p.label, 'name': p.name} for p in podcasts_errors]
+
+    for podcast in podcasts_not_found:
+        print(f'Не найдено: {podcast.label} - {podcast.name}')
+    print(f'Подкастов: {len(podcasts_not_found)} не найдено, {len(podcasts_errors)} ошибок.')
+
+    print(f'Итого: {len(tracks_not_found) + len(podcasts_not_found)} не найдено, {len(tracks_errors) + len(podcasts_errors)} ошибок.')
 
     with open(in_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)

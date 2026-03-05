@@ -6,6 +6,7 @@ from tqdm import tqdm
 from ytmusicapi import YTMusic, setup_oauth
 from typing import List, Tuple, Optional
 from .track import Track
+from .podcast import Podcast
 
 
 class YoutubeImporter:
@@ -83,6 +84,30 @@ class YoutubeImporter:
 
         result = self._get_best_result(results, track)
         return (idx, track, result.get('videoId'), None)
+    
+    def _search_podcast(self, podcast: Podcast, idx: int) -> Tuple[int, Podcast, Optional[str], Optional[str]]:
+        """
+        Search for a podcast on YouTube Music.
+        Returns (index, podcast, browseId or None, error or None).
+        """
+        query = f'{podcast.name}'
+
+        try:
+            results = self.ytmusic.search(query)
+        except Exception as e:
+            return (idx, podcast, None, str(e))
+
+        # Since we search by the exact name of the podcast,
+        # we expect it to be the first result, and consider
+        # the search failed if it's not
+        search_result = results[0]
+
+        if search_result.get('resultType') != 'podcast':
+            return (idx, podcast, None, 'not_found')
+
+        browse_id = search_result.get('browseId')
+        playlist_id = browse_id.replace('MPSP', '', 1) # We need to remove the prefix for podcasts
+        return (idx, podcast, playlist_id, None)
 
     def _like_track(self, track: Track, video_id: str) -> Tuple[Track, bool, Optional[str]]:
         """Like a single track. Returns (track, success, error)."""
@@ -91,6 +116,14 @@ class YoutubeImporter:
             return (track, True, None)
         except Exception as e:
             return (track, False, str(e))
+        
+    def _like_podcast(self, podcast: Podcast, playlist_id: str) -> Tuple[Podcast, bool, Optional[str]]:
+        """Like a single podcast. Returns (podcast, success, error)."""
+        try:
+            self.ytmusic.rate_playlist(playlist_id, 'LIKE')
+            return (podcast, True, None)
+        except Exception as e:
+            return (podcast, False, str(e))
 
     def import_liked_tracks(self, tracks: List[Track], max_workers: int = 5, keep_order: bool = True) -> Tuple[List[Track], List[Track]]:
         """
@@ -168,6 +201,86 @@ class YoutubeImporter:
                         except Exception as e:
                             errors.append(track)
                             pbar.write(f'Like error: {track.artist} - {track.name}: {e}')
+                        pbar.update(1)
+
+        return not_found, errors
+    
+    def import_liked_podcasts(self, podcasts: List[Podcast], max_workers: int = 5, keep_order: bool = True) -> Tuple[List[Podcast], List[Podcast]]:
+        """
+        Import podcasts to YouTube Music.
+
+        Args:
+            podcasts: List of podcasts to import
+            max_workers: Number of parallel workers (default 5)
+            keep_order: If True, likes are added sequentially to preserve order (slower).
+                       If False, likes are added in parallel (faster, random order).
+        """
+        not_found: List[Podcast] = []
+        errors: List[Podcast] = []
+
+        # Этап 1: Параллельный поиск
+        search_results = {}  # idx -> (podcast, videoId, error)
+
+        print("Поиск подкастов...")
+        with tqdm(total=len(podcasts), desc='Search') as pbar:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(self._search_podcast, podcast, idx): idx
+                          for idx, podcast in enumerate(podcasts)}
+
+                for future in as_completed(futures):
+                    try:
+                        idx, podcast, playlist_id, error = future.result()
+                        search_results[idx] = (podcast, playlist_id, error)
+                        pbar.set_postfix_str(f'{podcast.label} - {podcast.name}'[:40])
+                    except Exception as e:
+                        idx = futures[future]
+                        search_results[idx] = (podcast[idx], None, str(e))
+                    pbar.update(1)
+
+        # Собираем подкасты для лайков
+        podcasts_to_like = []  # (idx, podcast, playlist_id)
+        for idx in range(len(podcasts)):
+            podcast, playlist_id, error = search_results[idx]
+
+            if error == 'not_found' or not playlist_id:
+                not_found.append(podcast)
+            elif error:
+                errors.append(podcast)
+            else:
+                podcasts_to_like.append((idx, podcast, playlist_id))
+
+        # Этап 2: Добавление лайков
+        print("Добавление лайков...")
+
+        if keep_order:
+            # Последовательное добавление для сохранения порядка
+            with tqdm(total=len(podcasts_to_like), desc='Like') as pbar:
+                for idx, podcast, playlist_id in podcasts_to_like:
+                    try:
+                        self.ytmusic.rate_playlist(playlist_id, 'LIKE')
+                        pbar.set_postfix_str(f'{podcast.label} - {podcast.name}'[:40])
+                    except Exception as e:
+                        errors.append(podcast)
+                        pbar.write(f'Like error: {podcast.label} - {podcast.name}: {e}')
+                    pbar.update(1)
+        else:
+            # Параллельное добавление (быстрее, но порядок случайный)
+            with tqdm(total=len(podcasts_to_like), desc='Like') as pbar:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(self._like_podcast, podcast, playlist_id): podcast
+                              for idx, podcast, playlist_id in podcasts_to_like}
+
+                    for future in as_completed(futures):
+                        podcast = futures[future]
+                        try:
+                            _, success, error = future.result()
+                            if not success:
+                                errors.append(podcast)
+                                pbar.write(f'Like error: {podcast.label} - {podcast.name}: {error}')
+                            pbar.set_postfix_str(f'{podcast.label} - {podcast.name}'[:40])
+                        except Exception as e:
+                            errors.append(podcast)
+                            pbar.write(f'Like error: {podcast.label} - {podcast.name}: {e}')
                         pbar.update(1)
 
         return not_found, errors
