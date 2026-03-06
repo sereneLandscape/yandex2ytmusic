@@ -6,6 +6,7 @@ from tqdm import tqdm
 from ytmusicapi import YTMusic, setup_oauth
 from typing import List, Tuple, Optional
 from .track import Track
+from .playlist import Playlist
 
 
 class YoutubeImporter:
@@ -92,6 +93,53 @@ class YoutubeImporter:
         except Exception as e:
             return (track, False, str(e))
 
+    def _create_playlist(self, playlist: Playlist, max_workers: int = 5) -> Tuple[List[Track], List[Track]]:
+        """
+        Creates a playlist.
+
+        Args:
+            playlist: Playlist to create
+            max_workers: Number of parallel workers (default 5). Used for track search only
+        
+        Returns:
+            Tuple[List[Track], List[Track]]: A list of not found tracks and a list of tracks that encountered during search
+        """
+        not_found = []
+        errors = []
+        # Этап 1: Параллельный поиск
+        search_results = {}  # idx -> (track, videoId, error)
+        tracks = playlist.tracks
+        with tqdm(total=len(tracks), desc='Search for tracks in playlist') as pbar:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(self._search_track, track, idx): idx
+                        for idx, track in enumerate(tracks)}
+
+                for future in as_completed(futures):
+                    try:
+                        idx, track, video_id, error = future.result()
+                        search_results[idx] = (track, video_id, error)
+                        pbar.set_postfix_str(f'{track.artist} - {track.name}'[:40])
+                    except Exception as e:
+                        idx = futures[future]
+                        search_results[idx] = (tracks[idx], None, str(e))
+                    pbar.update(1)
+
+        # Собираем треки для плейлиста
+        tracks_to_add = []  # (idx, track, video_id)
+        for idx in range(len(tracks)):
+            track, video_id, error = search_results[idx]
+
+            if error == 'not_found' or not video_id:
+                not_found.append(track)
+            elif error:
+                errors.append(track)
+            else:
+                tracks_to_add.append(video_id)
+        
+        self.ytmusic.create_playlist(playlist.title, playlist.description, video_ids=tracks_to_add)
+        
+        return (not_found, errors)
+
     def import_liked_tracks(self, tracks: List[Track], max_workers: int = 5, keep_order: bool = True) -> Tuple[List[Track], List[Track]]:
         """
         Import tracks to YouTube Music.
@@ -171,6 +219,37 @@ class YoutubeImporter:
                         pbar.update(1)
 
         return not_found, errors
+
+    def import_playlists(self, playlists: List[Playlist], max_workers: int = 5) -> List[Playlist]:
+        """
+        Import playlists to YouTube Music.
+
+        Args:
+            playlists: List of playlists to import
+            max_workers: Number of parallel workers (default 5). Used for track search only
+
+        Returns:
+            List[Playlist]: A list of Playlists that encountered errors during creation
+        """
+        errors: List[Playlist] = []
+
+        # Последовательное создание плейлистов
+        # TODO: Подумать над параллелизацией
+        with tqdm(total=len(playlists), desc='Playlist creation') as pbar:
+            for playlist in playlists:
+                try:
+                    not_found, track_errors = self._create_playlist(playlist, max_workers=max_workers)
+                    print(f'Плейлист: {playlist.title}')
+                    for track in not_found:
+                        print(f'Не найдено: {track.artist} - {track.name}')
+                    for track in track_errors:
+                        print(f'Ошибка при поиске: {track.artist} - {track.name}')
+                    pbar.set_postfix_str(f'{playlist.title}'[:40])
+                except Exception as e:
+                    errors.append(playlist)
+                    pbar.write(f'Playlist creation error: {playlist.title}: {e}')
+                pbar.update(1)
+        return errors
 
     def _get_best_result(self, results: List[dict], track: Track) -> dict:
         songs = []

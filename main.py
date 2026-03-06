@@ -4,6 +4,7 @@ import os
 from core import YandexMusicExporter
 from core import YoutubeImoirter
 from core.track import Track
+from core.playlist import Playlist
 
 
 def export_from_yandex(out_path: str) -> None:
@@ -52,6 +53,14 @@ def import_to_youtube(in_path: str, youtube_creds: str) -> None:
     tracks = [Track(artist=t['artist'], name=t['name']) for t in data['liked_tracks']]
     print(f'Загружено {len(tracks)} треков из {in_path}')
 
+    playlists = []
+    for playlist in data['playlists']:
+        tracklist = []
+        for track in playlist['tracks']:
+            tracklist.append(Track(track['artist'], track['name']))
+        playlists.append(Playlist(playlist['title'], playlist['description'], tracklist))
+    print(f'Загружено {len(playlists)} плейлистов из {in_path}')
+
     # Выбор режима импорта
     print("\nРежим импорта:")
     print("  1. Быстрый (параллельный, порядок не сохраняется)")
@@ -64,9 +73,12 @@ def import_to_youtube(in_path: str, youtube_creds: str) -> None:
 
     print('Импорт треков в YouTube Music...')
     not_found, errors = exporter.import_liked_tracks(tracks, keep_order=keep_order)
-
     data['not_found'] = [{'artist': t.artist, 'name': t.name} for t in not_found]
     data['errors'] = [{'artist': t.artist, 'name': t.name} for t in errors]
+
+    print('Импорт плейлистов в YouTube Music...')
+    errors = exporter.import_playlists(playlists)
+    data['errors'].extend([{'title': p.title} for p in errors])
 
     for track in not_found:
         print(f'Не найдено: {track.artist} - {track.name}')
