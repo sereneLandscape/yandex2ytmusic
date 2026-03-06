@@ -89,11 +89,15 @@ def import_to_youtube(in_path: str, youtube_creds: str) -> None:
         print(f'Не найдено: {track.artist} - {track.name}')
     print(f'Треков: {len(tracks_not_found)} не найдено, {len(tracks_errors)} ошибок.')
 
+    print()
+
     print('Импорт плейлистов в YouTube Music...')
     playlist_errors = exporter.import_playlists(playlists)
     data['errors'].extend([{'title': p.title} for p in playlist_errors])
 
     print(f'{len(playlist_errors)} ошибок при создании плейлистов.')
+    
+    print()
     
     print('Импорт подкастов в YouTube Music...')
     podcasts_not_found, podcasts_errors = exporter.import_liked_podcasts(podcasts, keep_order=keep_order)

@@ -351,12 +351,13 @@ class YoutubeImporter:
         with tqdm(total=len(playlists), desc='Playlist creation') as pbar:
             for playlist in playlists:
                 try:
-                    not_found, track_errors = self._create_playlist(playlist, max_workers=max_workers)
-                    print(f'Плейлист: {playlist.title}')
-                    for track in not_found:
-                        print(f'Не найдено: {track.artist} - {track.name}')
-                    for track in track_errors:
-                        print(f'Ошибка при поиске: {track.artist} - {track.name}')
+                    not_found, errors = self._create_playlist(playlist, max_workers=max_workers)
+                    if not_found or errors:
+                        print(f'Плейлист: {playlist.title}')
+                        for track in not_found:
+                            print(f'Не найдено: {track.artist} - {track.name}')
+                        for track in errors:
+                            print(f'Ошибка при поиске: {track.artist} - {track.name}')
                     pbar.set_postfix_str(f'{playlist.title}'[:40])
                 except Exception as e:
                     errors.append(playlist)
