@@ -19,7 +19,12 @@ def export_from_yandex(out_path: str) -> None:
     tracks = importer.export_liked_tracks()
     tracks.reverse()
 
+    print('Экспорт лайкнутых плейлистов из Яндекс Музыки...')
+    playlists = importer.export_playlists()
+    playlists.reverse()
+
     data = {
+        'playlists': [{'title': playlist.title, 'description': playlist.description, 'tracks': [{'artist': t.artist, 'name': t.name} for t in playlist.tracks]} for playlist in playlists],
         'liked_tracks': [{'artist': t.artist, 'name': t.name} for t in tracks],
         'not_found': [],
         'errors': [],
@@ -28,7 +33,7 @@ def export_from_yandex(out_path: str) -> None:
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f'Экспортировано {len(tracks)} треков в {out_path}')
+    print(f'Экспортировано {len(tracks)} треков и {len(playlists)} плейлистов в {out_path}')
 
 
 def import_to_youtube(in_path: str, youtube_creds: str) -> None:
